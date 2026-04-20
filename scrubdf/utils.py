@@ -166,7 +166,7 @@ def convert_series(series: pd.Series) -> pd.Series:
         Numeric Series if conversion succeeds, otherwise the original.
     """
     try:
-        cleaned = series.astype("str").str.replace(",", "", regex=False).str.strip()
+        cleaned = series.astype("str").str.replace(r'[^-0-9.]', '', regex=True).str.strip()
         non_null = cleaned[cleaned.notna() & (cleaned != "<NA>") & (cleaned != "nan")]
         if len(non_null) == 0:
             return series
