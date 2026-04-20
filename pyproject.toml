@@ -1,0 +1,62 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "scrubdf"
+version = "0.1.0"
+description = "Scrub, clean, and explore DataFrames — automated data cleaning and EDA pipeline"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "Dataverse GH", email = "hello@dataversegh.com"},
+]
+keywords = [
+    "data-cleaning", "eda", "pandas", "dataframe",
+    "outliers", "missing-values", "data-quality",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "Topic :: Scientific/Engineering",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Typing :: Typed",
+]
+
+dependencies = [
+    "pandas>=2.0,<4.0",
+    "numpy>=1.24,<3.0",
+    "scipy>=1.10,<2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+]
+ml = [
+    "scikit-learn>=1.2",
+]
+
+[project.urls]
+Homepage = "https://github.com/dataversegh/scrubdf"
+Documentation = "https://scrubdf.readthedocs.io"
+Repository = "https://github.com/dataversegh/scrubdf"
+Issues = "https://github.com/dataversegh/scrubdf/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+
+[tool.setuptools.package-data]
+scrubdf = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
