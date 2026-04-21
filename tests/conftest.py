@@ -24,14 +24,9 @@ def messy_df():
         "empty_col": [None] * n,
     })
 
-    # Inject missing values
     df.loc[0:4, " Age "] = np.nan
     df.loc[10:14, "Income"] = np.nan
-
-    # Inject duplicates
     df = pd.concat([df, df.iloc[:3]], ignore_index=True)
-
-    # Inject outlier
     df.loc[0, "Income"] = 999999
 
     return df
@@ -67,6 +62,46 @@ def duplicate_df():
         "b": [10, 20, 30, 10, 20],
         "c": ["x", "y", "z", "x", "y"],
     })
+
+
+@pytest.fixture
+def id_df():
+    """DataFrame with ID columns that should be detected and protected."""
+    np.random.seed(42)
+    n = 100
+    return pd.DataFrame({
+        "student_id": range(1001, 1001 + n),
+        "respondent_code": [f"R{i:04d}" for i in range(n)],
+        "age": np.random.randint(18, 65, n),
+        "income": np.random.normal(50000, 15000, n),
+        "satisfaction": np.random.choice([1, 2, 3, 4, 5], n),
+    })
+
+
+@pytest.fixture
+def survey_df():
+    """DataFrame simulating survey data with Likert scales and skip logic."""
+    np.random.seed(42)
+    n = 200
+
+    df = pd.DataFrame({
+        "respondent_id": range(1, n + 1),
+        "age": np.random.randint(18, 70, n),
+        "gender": np.random.choice([1, 2, 3], n),  # coded: 1=M, 2=F, 3=Other
+        "q1_satisfaction": np.random.choice([1, 2, 3, 4, 5], n),
+        "q2_recommend": np.random.choice([1, 2, 3, 4, 5], n),
+        "q3_used_product": np.random.choice([0, 1], n),  # 0=No, 1=Yes
+        "q4_product_rating": np.random.choice([1, 2, 3, 4, 5], n),
+        "q5_comments": np.random.choice(
+            ["Great", "OK", "Bad", "Amazing", None], n
+        ),
+        "income_bracket": np.random.choice([1, 2, 3, 4, 5], n),
+    })
+
+    # Simulate skip logic: q4 only answered if q3=1
+    df.loc[df["q3_used_product"] == 0, "q4_product_rating"] = np.nan
+
+    return df
 
 
 @pytest.fixture

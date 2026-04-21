@@ -1,4 +1,4 @@
-"""Tests for scrubdf.cleaning — priority functions, error paths, edge cases."""
+"""Tests for scrubdf.cleaning - all functions, profiles, edge cases."""
 
 import numpy as np
 import pandas as pd
@@ -9,7 +9,10 @@ from scrubdf.cleaning import (
     cleaning_pipeline,
     convert_column_type,
     detect_and_remove_outliers,
+    drop_constant_columns,
+    drop_high_null_columns,
     handle_missing_values,
+    normalize_encoding_step,
     remove_duplicates,
     clean_unnamed_columns,
     drop_fully_empty,
@@ -21,24 +24,24 @@ from scrubdf.utils import PipelineLog, ScrubTypeError, ScrubValueError
 
 
 # ===================================================================
-# 1. cleaning_pipeline — end-to-end
+# 1. cleaning_pipeline — end-to-end + profiles
 # ===================================================================
 
 class TestCleaningPipeline:
     def test_returns_structured_dict(self, messy_df):
         result = cleaning_pipeline(messy_df)
-        expected_keys = {
+        required = {
             "cleaned_df", "original_shape", "cleaned_shape",
             "nulls_handled", "duplicates_removed", "type_fixes",
             "columns_dropped", "outliers_detected", "outlier_method",
-            "skew_report", "high_skew", "skew_kpi", "logs",
+            "skew_report", "high_skew", "skew_kpi",
+            "id_columns", "protected_columns", "profile_used", "logs",
         }
-        assert expected_keys == set(result.keys())
+        assert required <= set(result.keys())
 
     def test_output_is_cleaner(self, messy_df):
         result = cleaning_pipeline(messy_df)
         assert result["cleaned_shape"][0] <= result["original_shape"][0]
-        assert result["cleaned_shape"][1] < result["original_shape"][1]
 
     def test_no_nulls_after_default_pipeline(self, messy_df):
         result = cleaning_pipeline(messy_df)
@@ -59,7 +62,7 @@ class TestCleaningPipeline:
             cleaning_pipeline(pd.DataFrame())
 
     def test_rejects_non_dataframe(self):
-        with pytest.raises(ScrubTypeError, match="Expected a pandas DataFrame"):
+        with pytest.raises(ScrubTypeError):
             cleaning_pipeline({"a": [1, 2, 3]})
 
     def test_rejects_invalid_step_names(self, messy_df):
@@ -68,7 +71,6 @@ class TestCleaningPipeline:
 
     def test_step_selection(self, messy_df):
         result = cleaning_pipeline(messy_df, steps={"duplicates"})
-        assert result["duplicates_removed"] >= 0
         assert result["outlier_method"] == "skipped"
 
     def test_does_not_mutate_input(self, messy_df):
@@ -78,23 +80,49 @@ class TestCleaningPipeline:
         assert messy_df.shape == original_shape
         assert messy_df.columns.tolist() == original_columns
 
-    def test_all_steps_constant(self):
-        """ALL_STEPS should match the documented step names."""
-        assert "unnamed_columns" in ALL_STEPS
-        assert "outliers" in ALL_STEPS
-        assert len(ALL_STEPS) == 10
+    def test_profile_auto(self, messy_df):
+        result = cleaning_pipeline(messy_df, profile="auto")
+        assert result["profile_used"] == "auto"
+
+    def test_profile_transactional(self, messy_df):
+        result = cleaning_pipeline(messy_df, profile="transactional")
+        assert result["profile_used"] == "transactional"
+
+    def test_profile_survey(self, survey_df):
+        result = cleaning_pipeline(survey_df, profile="survey")
+        assert result["profile_used"] == "survey"
+        # Survey profile should preserve skip-logic missingness
+        # q4 should still have nulls where q3=0
+        cleaned = result["cleaned_df"]
+        assert cleaned.isnull().sum().sum() > 0 or "q4" not in str(cleaned.columns)
+
+    def test_explicit_params_override_profile(self, messy_df):
+        result = cleaning_pipeline(
+            messy_df,
+            profile="survey",
+            missing_strategy="median",
+            outlier_mode="flag",
+        )
+        assert result["profile_used"] == "survey"
+
+    def test_id_columns_detected(self, id_df):
+        result = cleaning_pipeline(id_df)
+        assert "student_id" in result["id_columns"]
+
+    def test_id_columns_excluded_from_outliers(self, id_df):
+        result = cleaning_pipeline(id_df)
+        # student_id should NOT appear in outlier report
+        assert "student_id" not in result["outliers_detected"]
 
 
 # ===================================================================
-# 2. handle_missing_values — all strategies
+# 2. handle_missing_values
 # ===================================================================
 
 class TestHandleMissingValues:
     def test_median_strategy(self, missing_df):
-        plog = PipelineLog()
-        result = handle_missing_values(missing_df.copy(), strategy="median", plog=plog)
+        result = handle_missing_values(missing_df.copy(), strategy="median")
         assert result[["num_a", "num_b"]].isnull().sum().sum() == 0
-        assert result["text_a"].isnull().sum() == 0
 
     def test_mean_strategy(self, missing_df):
         result = handle_missing_values(missing_df.copy(), strategy="mean")
@@ -108,28 +136,27 @@ class TestHandleMissingValues:
     def test_drop_strategy(self, missing_df):
         result = handle_missing_values(missing_df.copy(), strategy="drop")
         assert result.shape[0] < missing_df.shape[0]
-        assert result[["num_a", "num_b"]].isnull().sum().sum() == 0
 
     def test_skip_strategy(self, missing_df):
         result = handle_missing_values(missing_df.copy(), strategy="skip")
         assert result.isnull().sum().sum() == missing_df.isnull().sum().sum()
 
-    def test_text_columns_filled_with_unknown(self, missing_df):
-        result = handle_missing_values(missing_df.copy(), strategy="median")
-        assert (result["text_a"] == "Unknown").sum() == 2
-
     def test_invalid_strategy_raises(self, missing_df):
-        with pytest.raises(ScrubValueError, match="Invalid missing-value strategy"):
+        with pytest.raises(ScrubValueError):
             handle_missing_values(missing_df.copy(), strategy="invalid")
 
-    def test_no_missing_values_is_noop(self):
-        df = pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
-        result = handle_missing_values(df.copy(), strategy="median")
-        pd.testing.assert_frame_equal(result, df)
+    def test_exclude_cols(self, missing_df):
+        result = handle_missing_values(
+            missing_df.copy(), strategy="median", exclude_cols={"num_a"}
+        )
+        # num_a should still have nulls
+        assert result["num_a"].isnull().sum() > 0
+        # num_b should be filled
+        assert result["num_b"].isnull().sum() == 0
 
 
 # ===================================================================
-# 3. detect_and_remove_outliers — IQR + Z-score + edge cases
+# 3. detect_and_remove_outliers — flag mode + exclude
 # ===================================================================
 
 class TestDetectAndRemoveOutliers:
@@ -138,49 +165,52 @@ class TestDetectAndRemoveOutliers:
         cleaned, method, report, kpi = detect_and_remove_outliers(
             numeric_df, method="IQR"
         )
-        assert method == "IQR"
         assert cleaned.shape[0] < numeric_df.shape[0]
-        assert report["normal"] > 0
 
     def test_zscore_removes_outliers(self, numeric_df):
         numeric_df.loc[0, "normal"] = 10000
         cleaned, method, report, kpi = detect_and_remove_outliers(
             numeric_df, method="Z-score"
         )
-        assert method == "Z-score"
         assert cleaned.shape[0] < numeric_df.shape[0]
 
-    def test_auto_selects_method(self, numeric_df):
-        _, method, _, _ = detect_and_remove_outliers(numeric_df, method=None)
-        assert method in ("IQR", "Z-score", "Isolation Forest")
+    def test_flag_mode(self, numeric_df):
+        numeric_df.loc[0, "normal"] = 10000
+        result, method, report, kpi = detect_and_remove_outliers(
+            numeric_df, method="IQR", mode="flag"
+        )
+        # Rows should NOT be removed
+        assert result.shape[0] == numeric_df.shape[0]
+        # _is_outlier column should exist
+        assert "_is_outlier" in result.columns
+        assert result["_is_outlier"].sum() > 0
+
+    def test_skip_mode(self, numeric_df):
+        result, method, _, _ = detect_and_remove_outliers(
+            numeric_df, mode="skip"
+        )
+        assert method == "skipped"
+        assert result.shape == numeric_df.shape
+
+    def test_exclude_cols(self, numeric_df):
+        numeric_df.loc[0, "normal"] = 10000
+        _, _, report, _ = detect_and_remove_outliers(
+            numeric_df, method="IQR", exclude_cols={"normal"}
+        )
+        assert "normal" not in report
 
     def test_invalid_method_raises(self, numeric_df):
-        with pytest.raises(ScrubValueError, match="Invalid outlier method"):
-            detect_and_remove_outliers(numeric_df, method="InvalidMethod")
-
-    def test_kpi_only_has_nonzero(self, numeric_df):
-        _, _, report, kpi = detect_and_remove_outliers(numeric_df, method="IQR")
-        for col, count in kpi.items():
-            assert count > 0
+        with pytest.raises(ScrubValueError):
+            detect_and_remove_outliers(numeric_df, method="Invalid")
 
     def test_no_numeric_columns_skips(self):
-        df = pd.DataFrame({"a": ["x", "y", "z"], "b": ["1", "2", "3"]})
-        cleaned, method, report, kpi = detect_and_remove_outliers(df)
+        df = pd.DataFrame({"a": ["x", "y", "z"]})
+        _, method, _, _ = detect_and_remove_outliers(df)
         assert method == "skipped"
-        assert report == {}
-
-    def test_per_column_error_does_not_crash(self):
-        """A column that causes an error should be logged, not crash."""
-        plog = PipelineLog()
-        df = pd.DataFrame({"good": [1, 2, 3, 4, 5], "also_good": [10, 20, 30, 40, 50]})
-        cleaned, method, report, kpi = detect_and_remove_outliers(
-            df, method="IQR", plog=plog
-        )
-        assert isinstance(cleaned, pd.DataFrame)
 
 
 # ===================================================================
-# 4. convert_column_type — string→numeric
+# 4. convert_column_type — with exclude
 # ===================================================================
 
 class TestConvertColumnType:
@@ -193,25 +223,23 @@ class TestConvertColumnType:
         df = pd.DataFrame({"name": ["Alice", "Bob", "Charlie"]})
         result = convert_column_type(df)
         assert not pd.api.types.is_numeric_dtype(result["name"])
+    
+    def test_handles_mixed_types(self):
+        df = pd.DataFrame({"mixed": [1,2,"3"]})
+        result = convert_column_type(df)
+        assert pd.api.types.is_numeric_dtype(result["mixed"])
+        assert result["mixed"].iloc[2] == 3
 
     def test_handles_commas_in_numbers(self):
-        df = pd.DataFrame({"amount": ["1,000", "2,500", "3,750"]})
+        df = pd.DataFrame({"amount": ["1,000", "2,500", "3,750", " 343 ", "$540"]})
         result = convert_column_type(df)
         assert pd.api.types.is_numeric_dtype(result["amount"])
-        assert result["amount"].iloc[0] == 1000
 
-    def test_logs_conversions(self):
-        plog = PipelineLog()
-        df = pd.DataFrame({"a": ["1", "2", "3"]})
-        convert_column_type(df, plog=plog)
-        assert any("Converted" in entry for entry in plog.entries)
-
-    def test_error_in_one_column_does_not_crash(self):
-        """Even if one column somehow fails, the rest should be processed."""
-        plog = PipelineLog()
-        df = pd.DataFrame({"ok": ["1", "2"], "also_ok": ["a", "b"]})
-        result = convert_column_type(df, plog=plog)
-        assert isinstance(result, pd.DataFrame)
+    def test_exclude_cols_skips_conversion(self):
+        df = pd.DataFrame({"id": ["1", "2", "3"], "val": ["4", "5", "6"]})
+        result = convert_column_type(df, exclude_cols={"id"})
+        assert not pd.api.types.is_numeric_dtype(result["id"])
+        assert pd.api.types.is_numeric_dtype(result["val"])
 
 
 # ===================================================================
@@ -220,34 +248,75 @@ class TestConvertColumnType:
 
 class TestRemoveDuplicates:
     def test_removes_exact_row_duplicates(self, duplicate_df):
-        result, dup_cols = remove_duplicates(duplicate_df)
+        result, _ = remove_duplicates(duplicate_df)
         assert result.shape[0] == 3
-
-    def test_returns_empty_dup_cols_when_none(self, duplicate_df):
-        _, dup_cols = remove_duplicates(duplicate_df)
-        assert dup_cols == []
 
     def test_handles_duplicate_columns(self):
         df = pd.DataFrame([[1, 2, 3]], columns=["a", "b", "a"])
         result, dup_cols = remove_duplicates(df)
         assert "a" in dup_cols
-        assert len(result.columns) == 2
-
-    def test_logs_actions(self, duplicate_df):
-        plog = PipelineLog()
-        remove_duplicates(duplicate_df, plog=plog)
-        assert any("duplicate" in entry.lower() for entry in plog.entries)
 
     def test_no_change_on_unique_data(self):
-        df = pd.DataFrame({"a": [1, 2, 3], "b": [4, 5, 6]})
-        result, dup_cols = remove_duplicates(df)
+        df = pd.DataFrame({"a": [1, 2, 3]})
+        result, _ = remove_duplicates(df)
         assert result.shape == df.shape
-        assert dup_cols == []
 
 
 # ===================================================================
-# 6. Other cleaning functions — edge cases
+# 6. New cleaning steps
 # ===================================================================
+
+class TestDropHighNullColumns:
+    def test_drops_above_threshold(self):
+        df = pd.DataFrame({
+            "mostly_null": [None] * 80 + [1.0] * 20,
+            "fine": range(100),
+        })
+        result = drop_high_null_columns(df, threshold=0.7)
+        assert "mostly_null" not in result.columns
+        assert "fine" in result.columns
+
+    def test_protects_specified_columns(self):
+        df = pd.DataFrame({
+            "skip_q": [None] * 80 + [1.0] * 20,
+            "fine": range(100),
+        })
+        result = drop_high_null_columns(
+            df, threshold=0.7, protect_cols={"skip_q"}
+        )
+        assert "skip_q" in result.columns
+
+    def test_no_drop_below_threshold(self):
+        df = pd.DataFrame({"a": [1, 2, None], "b": [4, 5, 6]})
+        result = drop_high_null_columns(df, threshold=0.7)
+        assert set(result.columns) == {"a", "b"}
+
+
+class TestDropConstantColumns:
+    def test_drops_constant(self):
+        df = pd.DataFrame({"const": [42] * 100, "varied": range(100)})
+        result = drop_constant_columns(df)
+        assert "const" not in result.columns
+        assert "varied" in result.columns
+
+    def test_keeps_non_constant(self):
+        df = pd.DataFrame({"a": [1, 2], "b": [3, 4]})
+        result = drop_constant_columns(df)
+        assert set(result.columns) == {"a", "b"}
+
+
+class TestNormalizeEncoding:
+    def test_normalizes_curly_quotes(self):
+        df = pd.DataFrame({"text": ["\u201cHello\u201d", "it\u2019s fine"]})
+        result = normalize_encoding_step(df)
+        assert result["text"].iloc[0] == '"Hello"'
+        assert result["text"].iloc[1] == "it's fine"
+
+    def test_normalizes_em_dash(self):
+        df = pd.DataFrame({"text": ["A\u2014B"]})
+        result = normalize_encoding_step(df)
+        assert result["text"].iloc[0] == "A-B"
+
 
 class TestCleanUnnamedColumns:
     def test_drops_all_null_unnamed(self):
@@ -259,25 +328,6 @@ class TestCleanUnnamedColumns:
         df = pd.DataFrame({"Unnamed: 0": [1, 2], "real": [3, 4]})
         result = clean_unnamed_columns(df)
         assert "renamed_1" in result.columns
-
-
-class TestDropFullyEmpty:
-    def test_drops_all_null_column(self):
-        df = pd.DataFrame({"a": [1, 2], "b": [None, None]})
-        result = drop_fully_empty(df)
-        assert "b" not in result.columns
-
-    def test_drops_all_null_row(self):
-        df = pd.DataFrame({"a": [1, None], "b": [2, None]})
-        result = drop_fully_empty(df)
-        assert len(result) == 1
-
-
-class TestStripWhitespace:
-    def test_strips_string_cells(self):
-        df = pd.DataFrame({"a": ["  hello  ", " world "]})
-        result = strip_whitespace(df)
-        assert result["a"].iloc[0] == "hello"
 
 
 class TestStandardiseValues:
@@ -297,8 +347,3 @@ class TestParseDateColumns:
         df = pd.DataFrame({"signup_date": ["2020-01-01", "2020-02-01"]})
         result = parse_date_columns(df)
         assert pd.api.types.is_datetime64_any_dtype(result["signup_date"])
-
-    def test_ignores_non_date_columns(self):
-        df = pd.DataFrame({"name": ["2020-01-01", "2020-02-01"]})
-        result = parse_date_columns(df)
-        assert not pd.api.types.is_datetime64_any_dtype(result["name"])

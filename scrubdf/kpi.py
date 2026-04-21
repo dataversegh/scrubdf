@@ -1,6 +1,6 @@
 """KPI computation functions.
 
-These return plain Python dicts — the rendering layer (Streamlit, React,
+These return plain Python dicts - the rendering layer (Streamlit, React,
 email template) decides how to display them.  All functions validate
 inputs and handle edge cases (NaN, negative values, zero).
 """
@@ -93,12 +93,19 @@ def corr_pair(
 
     for col1, col2 in itertools.combinations(numeric_cols, 2):
         try:
-            corr = df[col1].corr(df[col2])
+            s1 = df[col1]
+            s2 = df[col2]
+
+            # Skip constant or all-null columns
+            if s1.nunique(dropna=True) <= 1 or s2.nunique(dropna=True) <= 1:
+                continue
+
+            corr = s1.corr(s2)
             if pd.notna(corr) and abs(corr) > threshold:
                 corr_dict[f"{col1} vs {col2}"] = round(corr, 3)
+
         except Exception:
             continue
-
     return corr_dict, len(corr_dict)
 
 

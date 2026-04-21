@@ -1,12 +1,14 @@
 """Shared helper utilities used across scrubdf modules.
 
 This module provides:
-    - ``PipelineLog``: per-run log collector that also emits to Python's logging
-    - ``ScrubError`` / ``ScrubTypeError`` / ``ScrubValueError``: typed exceptions
+    - ``PipelineLog``: per-run log collector bridged to Python's logging
+    - ``ScrubError`` hierarchy: typed exceptions
+    - ``detect_id_columns``: heuristic ID column detection
     - ``modified_z``: Modified Z-score computation
     - ``convert_series``: string-to-numeric Series conversion
     - ``validate_dataframe``: input guard with size warnings
     - ``is_string_dtype``: pandas 2/3 compatible string dtype check
+    - ``normalize_unicode``: encoding normalization for string columns
 """
 
 from __future__ import annotations
@@ -14,6 +16,7 @@ from __future__ import annotations
 import datetime
 import logging
 import re
+import unicodedata
 import warnings
 from dataclasses import dataclass, field
 from typing import List
@@ -54,52 +57,27 @@ class PipelineLog:
 
     Each run gets its own ``PipelineLog`` instance — no globals, no file I/O,
     safe for concurrent API requests.  Messages are also forwarded to
-    Python's ``logging`` module under the ``scrubdf`` logger so they appear
-    in structured logging setups (Cloud Logging, etc.).
-
-    Examples
-    --------
-    >>> plog = PipelineLog()
-    >>> plog.log("Dropped 5 duplicates")
-    >>> len(plog)
-    1
+    Python's ``logging`` module under the ``scrubdf`` logger.
     """
 
     entries: List[str] = field(default_factory=list)
 
     def log(self, message: str, *, level: int = logging.INFO) -> str:
-        """Record a timestamped log message.
-
-        Parameters
-        ----------
-        message : str
-            Human-readable description of what happened.
-        level : int
-            Python logging level (default ``logging.INFO``).
-
-        Returns
-        -------
-        str
-            The formatted, timestamped message.
-        """
         timestamp = f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}"
         self.entries.append(timestamp)
         logger.log(level, message)
         return timestamp
 
     def warn(self, message: str) -> str:
-        """Convenience: log at WARNING level."""
         return self.log(message, level=logging.WARNING)
 
     def error(self, message: str) -> str:
-        """Convenience: log at ERROR level."""
         return self.log(message, level=logging.ERROR)
 
     def __len__(self) -> int:
         return len(self.entries)
 
     def __bool__(self) -> bool:
-        # Always truthy — an empty log is still a valid log to write to.
         return True
 
     def __iter__(self):
@@ -107,22 +85,74 @@ class PipelineLog:
 
 
 # ---------------------------------------------------------------------------
-# Modified Z-score (used by outlier detection)
+# ID column detection
+# ---------------------------------------------------------------------------
+
+_ID_PATTERNS = re.compile(
+    r"(^id$|_id$|^id_|_id_|_key$|_code$|_index$|_no$|_num$|_number$|"
+    r"^index$|^key$|^code$|^respondent|^participant|^record)",
+    re.IGNORECASE,
+)
+
+
+def detect_id_columns(df: pd.DataFrame) -> list[str]:
+    """Detect columns that are likely identifiers (not meaningful numerics).
+
+    A column is flagged as an ID if:
+    - Its name matches common ID patterns (id, key, code, index, etc.)
+    - OR it's numeric/string with near-unique values (>95% unique)
+      AND monotonically increasing/decreasing
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input DataFrame.
+
+    Returns
+    -------
+    list of str
+        Column names identified as likely IDs.
+    """
+    id_cols: list[str] = []
+    n_rows = len(df)
+
+    for col in df.columns:
+        # Name-based detection (works even on empty DataFrames)
+        if _ID_PATTERNS.search(str(col)):
+            id_cols.append(col)
+            continue
+
+        # Behavior-based detection requires data
+        if n_rows == 0:
+            continue
+
+        # Behavior-based detection for numeric columns
+        if pd.api.types.is_numeric_dtype(df[col]):
+            nunique = df[col].nunique()
+            uniqueness_ratio = nunique / n_rows if n_rows > 0 else 0
+
+            if uniqueness_ratio > 0.95:
+                # Check if monotonic (typical of auto-increment IDs)
+                non_null = df[col].dropna()
+                if len(non_null) > 1:
+                    is_monotonic = (
+                        non_null.is_monotonic_increasing
+                        or non_null.is_monotonic_decreasing
+                    )
+                    if is_monotonic:
+                        id_cols.append(col)
+
+    return id_cols
+
+
+# ---------------------------------------------------------------------------
+# Modified Z-score
 # ---------------------------------------------------------------------------
 
 def modified_z(series: pd.Series) -> pd.Series | np.ndarray:
     """Compute modified Z-scores using the Median Absolute Deviation.
 
-    Parameters
-    ----------
-    series : pd.Series
-        Numeric series to score.
-
-    Returns
-    -------
-    pd.Series or np.ndarray
-        Z-scores.  If MAD is zero (constant column), returns an array
-        of zeros so no values are flagged as outliers.
+    Returns zeros for constant columns (MAD = 0).
     """
     median = series.median()
     mad = np.median(np.abs(series - median))
@@ -136,11 +166,7 @@ def modified_z(series: pd.Series) -> pd.Series | np.ndarray:
 # ---------------------------------------------------------------------------
 
 def is_string_dtype(dtype) -> bool:
-    """Check if a dtype is any kind of string (``object`` or ``StringDtype``).
-
-    Works on both pandas 2 (where strings are ``object``) and pandas 3
-    (where strings are ``StringDtype``).
-    """
+    """Check if a dtype is any kind of string (``object`` or ``StringDtype``)."""
     return pd.api.types.is_object_dtype(dtype) or pd.api.types.is_string_dtype(dtype)
 
 
@@ -152,21 +178,10 @@ def convert_series(series: pd.Series) -> pd.Series:
     """Try to convert a string Series to numeric.
 
     Strips commas and whitespace first, then checks if every non-null value
-    matches a numeric pattern.  Returns the converted Series or the
-    original if conversion isn't appropriate.
-
-    Parameters
-    ----------
-    series : pd.Series
-        Series with string dtype.
-
-    Returns
-    -------
-    pd.Series
-        Numeric Series if conversion succeeds, otherwise the original.
+    matches a numeric pattern.
     """
     try:
-        cleaned = series.astype("str").str.replace(r'[^-0-9.]', '', regex=True).str.strip()
+        cleaned = series.astype("string").str.replace(r"[^0-9.-]", "", regex=True).str.strip()
         non_null = cleaned[cleaned.notna() & (cleaned != "<NA>") & (cleaned != "nan")]
         if len(non_null) == 0:
             return series
@@ -178,6 +193,35 @@ def convert_series(series: pd.Series) -> pd.Series:
         return series
     except Exception:
         return series
+
+
+# ---------------------------------------------------------------------------
+# Unicode normalization
+# ---------------------------------------------------------------------------
+
+def normalize_unicode(text: str) -> str:
+    """Normalize unicode text: curly quotes → straight, em dashes → hyphens, etc.
+
+    Uses NFKC normalization and applies common replacements.
+    """
+    if not isinstance(text, str):
+        return text
+    # NFKC normalization handles most compatibility characters
+    text = unicodedata.normalize("NFKC", text)
+    # Additional common replacements
+    replacements = {
+        "\u2018": "'",   # left single curly quote
+        "\u2019": "'",   # right single curly quote
+        "\u201c": '"',   # left double curly quote
+        "\u201d": '"',   # right double curly quote
+        "\u2013": "-",   # en dash
+        "\u2014": "-",   # em dash
+        "\u00a0": " ",   # non-breaking space
+        "\u2026": "...", # ellipsis
+    }
+    for old, new in replacements.items():
+        text = text.replace(old, new)
+    return text
 
 
 # ---------------------------------------------------------------------------
@@ -194,24 +238,7 @@ def validate_dataframe(
     max_rows_warn: int = MAX_ROWS_WARNING,
     max_rows_limit: int = MAX_ROWS_LIMIT,
 ) -> None:
-    """Guard: raise early if the input isn't a usable DataFrame.
-
-    Parameters
-    ----------
-    df : pd.DataFrame
-        The candidate DataFrame.
-    max_rows_warn : int
-        Emit a ``UserWarning`` if row count exceeds this.
-    max_rows_limit : int
-        Raise ``ScrubValueError`` if row count exceeds this.
-
-    Raises
-    ------
-    ScrubTypeError
-        If *df* is not a pandas DataFrame.
-    ScrubValueError
-        If *df* is empty, has no columns, or exceeds *max_rows_limit*.
-    """
+    """Guard: raise early if the input isn't a usable DataFrame."""
     if not isinstance(df, pd.DataFrame):
         raise ScrubTypeError(
             f"Expected a pandas DataFrame, got {type(df).__name__}"
@@ -223,8 +250,7 @@ def validate_dataframe(
     if len(df) > max_rows_limit:
         raise ScrubValueError(
             f"DataFrame has {len(df):,} rows, which exceeds the "
-            f"{max_rows_limit:,}-row safety limit. Split your data or "
-            f"increase max_rows_limit if you're sure."
+            f"{max_rows_limit:,}-row safety limit."
         )
     if len(df) > max_rows_warn:
         warnings.warn(

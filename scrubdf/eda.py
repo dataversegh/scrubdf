@@ -1,7 +1,7 @@
 """Exploratory Data Analysis functions.
 
 These functions *describe* a DataFrame without modifying it.
-They return DataFrames, dicts, or lists — never render anything.
+They return DataFrames, dicts, or lists - never render anything.
 All functions handle edge cases (empty DataFrames, no numeric columns, etc.)
 gracefully.
 """
