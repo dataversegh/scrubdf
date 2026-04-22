@@ -150,37 +150,26 @@ def detect_id_columns(df: pd.DataFrame) -> list[str]:
 # Modified Z-score
 # ---------------------------------------------------------------------------
 
-def modified_z(series: pd.Series) -> pd.Series | np.ndarray:
+def modified_z(series: pd.Series) -> pd.Series:
     """Compute modified Z-scores using the Median Absolute Deviation.
 
-    Returns zeros for constant columns (MAD = 0) Preserves missing values as NaN.
+    Returns zeros for constant columns (MAD = 0). Preserves missing values as NaN.
     """
     s = pd.to_numeric(series, errors="coerce")
 
-    print("DEBUG modified_z input dtype:", series.dtype)
-    print("DEBUG modified_z coerced dtype:", s.dtype)
-    print("DEBUG modified_z nulls:", s.isna().sum())
-
     if s.dropna().empty:
-        return pd.Series(np.zeros(len(s)), index=s.index, dtype="float64")
+        return pd.Series(np.zeros(len(s), dtype="float64"), index=s.index)
 
     median = s.median()
     mad = np.median(np.abs(s.dropna() - median))
 
-    print("DEBUG modified_z median:", median)
-    print("DEBUG modified_z mad:", mad)
-
     if pd.isna(mad) or mad == 0:
-        out = pd.Series(np.zeros(len(s), index=s.index, dtype="float64"))
+        out = pd.Series(np.zeros(len(s), dtype="float64"), index=s.index)
         out[s.isna()] = np.nan
         return out
-    
-    print("DEBUG modified_z result dtype:", result.dtype)
 
-    result = 0.6745 * (s - median) / mad
-    print("DEBUG modified_z result:", result)
+    result = pd.Series(0.6745 * (s - median) / mad, index=s.index, dtype="float64")
     return result
-    
 
 
 # ---------------------------------------------------------------------------
