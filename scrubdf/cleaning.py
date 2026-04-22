@@ -321,8 +321,12 @@ def handle_missing_values(
                 num_missing = df[col].isnull().sum()
                 if num_missing > 0:
                     if strategy == "median":
+                        if pd.api.types.is_integer_dtype(df[col]):
+                            fill_val = int(round(df[col].median()))
                         fill_val = df[col].median()
                     elif strategy == "mean":
+                        if pd.api.types.is_integer_dtype(df[col]):
+                            fill_val = int(round(df[col].mean()))
                         fill_val = df[col].mean()
                     elif strategy == "mode":
                         mode_vals = df[col].mode()
