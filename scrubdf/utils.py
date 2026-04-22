@@ -152,13 +152,22 @@ def detect_id_columns(df: pd.DataFrame) -> list[str]:
 def modified_z(series: pd.Series) -> pd.Series | np.ndarray:
     """Compute modified Z-scores using the Median Absolute Deviation.
 
-    Returns zeros for constant columns (MAD = 0).
+    Returns zeros for constant columns (MAD = 0) Preserves missing values as NaN.
     """
-    median = series.median()
-    mad = np.median(np.abs(series - median))
-    if mad == 0:
-        return np.zeros(len(series))
-    return 0.6745 * (series - median) / mad
+    s = pd.to_numeric(series, errors="coerce")
+
+    if s.dropna().empty:
+        return pd.Series(np.zeros(len(s)), index=s.index, dtype="float64")
+
+    median = s.median()
+    mad = np.median(np.abs(s.dropna() - median))
+
+    if pd.isna(mad) or mad == 0:
+        out = pd.Series(np.zeros(len(s), index=s.index, dtype="float64"))
+        out[s.na()] == np.nan
+        return out
+    
+    return 0.6745 * (s - median) / mad
 
 
 # ---------------------------------------------------------------------------
