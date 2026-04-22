@@ -734,7 +734,8 @@ def cleaning_pipeline(
         df = parse_date_columns(df, plog)
 
     # --- Quality checks ---
-    plog.log(f"Before outlier step: rows={len(df)}, cols={df.columns.tolist()}")
+    plog.log(f"Before outlier step: rows={len(df)}, cols={len(df.columns)}")
+    
     if "outliers" in active_steps:
         df, method_used, outlier_report, outlier_report_kpi = (
             detect_and_remove_outliers(
@@ -750,8 +751,7 @@ def cleaning_pipeline(
         outlier_report = {}
         outlier_report_kpi = {}
     
-    plog.log(f"After outlier step: rows={len(df)}, cols={df.columns.tolist()}")
-    plog.log(f"_is_outlier present? {'_is_outlier' in df.columns}")
+    plog.log(f"After outlier step: rows={len(df)}, cols={len(df.columns)}")
 
     # --- Post-clean analysis ---
     remaining_nulls = int(df.isnull().sum().sum())
