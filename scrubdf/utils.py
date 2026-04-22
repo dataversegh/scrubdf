@@ -17,6 +17,7 @@ import datetime
 import logging
 import re
 import unicodedata
+from unittest import result
 import warnings
 from dataclasses import dataclass, field
 from typing import List
@@ -156,18 +157,30 @@ def modified_z(series: pd.Series) -> pd.Series | np.ndarray:
     """
     s = pd.to_numeric(series, errors="coerce")
 
+    print("DEBUG modified_z input dtype:", series.dtype)
+    print("DEBUG modified_z coerced dtype:", s.dtype)
+    print("DEBUG modified_z nulls:", s.isna().sum())
+
     if s.dropna().empty:
         return pd.Series(np.zeros(len(s)), index=s.index, dtype="float64")
 
     median = s.median()
     mad = np.median(np.abs(s.dropna() - median))
 
+    print("DEBUG modified_z median:", median)
+    print("DEBUG modified_z mad:", mad)
+
     if pd.isna(mad) or mad == 0:
         out = pd.Series(np.zeros(len(s), index=s.index, dtype="float64"))
-        out[s.na()] == np.nan
+        out[s.isna()] = np.nan
         return out
     
-    return 0.6745 * (s - median) / mad
+    print("DEBUG modified_z result dtype:", result.dtype)
+
+    result = 0.6745 * (s - median) / mad
+    print("DEBUG modified_z result:", result)
+    return result
+    
 
 
 # ---------------------------------------------------------------------------

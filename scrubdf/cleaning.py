@@ -507,6 +507,10 @@ def detect_and_remove_outliers(
             for col in numeric_cols:
                 try:
                     mz = modified_z(cleaned_df[col])
+                    print("DEBUG mz type:", type(mz))
+                    print("DEBUG mz dtype:", getattr(mz, "dtype", None))
+                    print("DEBUG mz sample:", mz[:5] if hasattr(mz, "__getitem__") else mz)
+
                     outliers = np.abs(mz) > 3.5
                     outlier_report[col] = int(outliers.sum())
                     cleaned_df = cleaned_df[~outliers]
