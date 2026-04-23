@@ -150,27 +150,33 @@ def detect_id_columns(df: pd.DataFrame) -> list[str]:
 # Modified Z-score
 # ---------------------------------------------------------------------------
 
-def modified_z(series: pd.Series) -> pd.Series:
+def modified_z(series: pd.Series) -> pd.Series | np.ndarray:
     """Compute modified Z-scores using the Median Absolute Deviation.
-
-    Returns zeros for constant columns (MAD = 0). Preserves missing values as NaN.
+ 
+    Parameters
+    ----------
+    series : pd.Series
+        Numeric series to score.
+ 
+    Returns
+    -------
+    pd.Series or np.ndarray
+        Z-scores.  If MAD is zero (constant column) or the column is
+        all-null, returns an array of zeros so no values are flagged.
     """
-    s = pd.to_numeric(series, errors="coerce")
-
-    if s.dropna().empty:
-        return pd.Series(np.zeros(len(s), dtype="float64"), index=s.index)
-
-    median = s.median()
-    mad = np.median(np.abs(s.dropna() - median))
-
-    if pd.isna(mad) or mad == 0:
-        out = pd.Series(np.zeros(len(s), dtype="float64"), index=s.index)
-        out[s.isna()] = np.nan
-        return out
-
-    result = pd.Series(0.6745 * (s - median) / mad, index=s.index, dtype="float64")
-    return result
-
+    # Coerce to numeric — handles stray None / non-numeric values
+    numeric = pd.to_numeric(series, errors="coerce")
+ 
+    median = numeric.median()
+ 
+    # If median is NaN the column is entirely null — nothing to flag
+    if pd.isna(median):
+        return np.zeros(len(series))
+ 
+    mad = np.median(np.abs(numeric.dropna() - median))
+    if mad == 0:
+        return np.zeros(len(series))
+    return 0.6745 * (numeric - median) / mad
 
 # ---------------------------------------------------------------------------
 # Dtype helpers (pandas 2/3 compatible)
