@@ -424,6 +424,8 @@ def detect_and_remove_outliers(
     # Auto-select method
     if method is None:
         skewness = df[numeric_cols].skew().abs().mean()
+        if pd.isna(skewness):
+            skewness = 0.0
         n_rows = df.shape[0]
         if n_rows < 1000:
             method = "Z-score" if skewness > 1 else "IQR"
