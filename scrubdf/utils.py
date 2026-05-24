@@ -90,8 +90,21 @@ class PipelineLog:
 # ---------------------------------------------------------------------------
 
 _ID_PATTERNS = re.compile(
-    r"(^id$|_id$|^id_|_id_|_key$|_code$|_index$|_no$|_num$|_number$|"
-    r"^index$|^key$|^code$|^respondent|^participant|^record)",
+    # 1. Base IDs, Suffixes & DB Keys (Catches id, _id, _fk, _pk, _key, _code, etc.)
+    r"(^id$|_[fp]k$|^id_|_id_?|_key$|_code$|_index$|_[nN]o$|_num$|_number$)|"
+    
+    # 2. Shorthand Common Entity IDs (Catches customer id, userid, cust_id, acct_id, etc.)
+    r"(customer[ _]?id|user[ _]?id|cust_?id|acct_?id|^primary_key$)|"
+    
+    # 3. Zip Codes & Regional IDs (Catches zip code, zip_code, zipcode, postcode)
+    r"(zip[ _]?code|post[ _]?code)|"
+    
+    # 4. System Hashes & Tokens (Catches uuid, guid, token, hash, row_id)
+    r"(uuid|guid|hash|token|^row_|^idx_)|"
+    
+    # 5. Direct Metadata Identifiers (Catches index, key, code, respondent, ticket, etc.)
+    r"(^index$|^key$|^code$|^respondent|^participant|^record|^ticket|^invoice)",
+    
     re.IGNORECASE,
 )
 
